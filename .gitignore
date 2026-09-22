@@ -1,0 +1,6 @@
+# 本地运行环境与运行产物：不应随技能一起分发/提交
+.venv/
+__pycache__/
+*.pyc
+raw_*.html
+url-to-ima-tmp/
