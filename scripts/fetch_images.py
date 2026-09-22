@@ -1,5 +1,6 @@
 # -*- coding: utf-8 -*-
-"""fetch_images.py — 抓取网页正文中的图片并下载到本地，输出 URL→本地相对路径映射。
+"""
+fetch_images.py — 抓取网页正文中的图片并下载到本地，输出 URL→本地相对路径映射。
 
 用法:
   python fetch_images.py <page_url> <out_images_dir> <mapping_json>

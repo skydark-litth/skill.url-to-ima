@@ -61,7 +61,9 @@ meta['images_all'] = len(soup.find_all('img'))
 BLOCK = {'p', 'div', 'section', 'h1', 'h2', 'h3', 'h4', 'h5', 'h6', 'li', 'ul', 'ol',
          'blockquote', 'pre', 'figure', 'figcaption', 'table', 'tr', 'td', 'th', 'img'}
 # 引导语关键词仅用于**生成候选线索**，不参与自动删除（判定必须由 agent 看图）
-CTA = re.compile(r'(点击|戳|扫码|扫一扫|长按|识别图中|扫描二维码|关注|星标|订阅|加群|进群|入群|领取|报名|购买|下单|优惠|福利|课程|训练营|阅读原文|直达|入口|后台回复|subscribe|follow us|scan the qr|click here|buy now|sign up)', re.I)
+CTA = re.compile(r'(点击|戳|扫码|扫一扫|长按|识别图中|扫描二维码|关注|星标|订阅|加群|进群|入群|领取|'
+                 r'报名|购买|下单|优惠|福利|课程|训练营|阅读原文|直达|入口|后台回复|'
+                 r'subscribe|follow us|scan the qr|click here|buy now|sign up)', re.I)
 
 # ---- 图片分类：装饰图自动丢弃 + 广告候选上报（候选需 agent 看图确认）----
 IMG_IDX, IMG_SEQ = img_index_map(content)
@@ -124,7 +126,8 @@ meta['drop_arg'] = sorted(DROP)
 # 疑似「代码容器但不在 <pre> 内」：本脚本只逐字保留 <pre> 内容。若代码放在 div.code 之类
 # 的非 pre 容器里，bs4 在解析阶段就会丢掉行首缩进（已实测），此处显式上报，
 # 提醒 agent 对照原文核对/标注存疑，避免静默篡改代码。
-CODEISH = re.compile(r'\b(highlight|hljs|prism|codehilite|code-block|codeblock|sourcecode|prettyprint|language-)\b', re.I)
+CODEISH = re.compile(r'\b(highlight|hljs|prism|codehilite|code-block|codeblock|'
+                     r'sourcecode|prettyprint|language-)\b', re.I)
 suspect_code, seen_sig = [], set()
 for el in content.find_all(['div', 'section']):
     cls = ' '.join(el.get('class') or [])
@@ -234,7 +237,7 @@ def walk(node):
                 cells = []
                 for td in tr.find_all(['td', 'th']):
                     c = re.sub(r'\s+', ' ', norm(inline(td))).strip()
-                    cells.append(c.replace('|', '\|'))  # 单元格内管道符转义，避免破表
+                    cells.append(c.replace('|', '\\|'))  # 单元格内管道符转义，避免破表
                 rows.append('| ' + ' | '.join(cells) + ' |')
             if rows:
                 out.append('[TABLE]' + '\n'.join(rows) + '[/TABLE]')
