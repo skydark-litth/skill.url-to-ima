@@ -1,8 +1,8 @@
 ---
 name: url-to-ima
-description: "将网页/文章 URL 整理为 Markdown 文档并存入用户指定的 ima 知识库。流程：抓取正文（含图片Base64内嵌、代码/提示词全文保留、存疑文字标记）→ 深度结构化整理成 md → create_media→COS上传→add_knowledge 入库 → 核验 → 确认成功后才清理本地临时文件。适用于把收藏的公众号/知乎/网页文章沉淀进 ima 知识库。"
+description: "将网页/文章 URL 整理为 Markdown 文档并存入用户指定的 ima 知识库。流程：抓取正文（含图片Base64内嵌、代码/提示词全文保留、存疑文字标记）→ 广告图及配套推广文字由大模型目视识别后过滤 → 保留图片统一转WebP（quality=98，支持透明）并限最长边1600px → 深度结构化整理成 md → create_media→COS上传→add_knowledge 入库 → 核验 → 确认成功后才清理本地临时文件。适配微信公众号及各类普通文章网页（article/main/常见正文容器）。适用于把收藏的文章沉淀进 ima 知识库。"
 description_zh: "网页URL整理为Markdown并存入指定ima知识库（图片Base64内嵌/代码全文/存疑文字标记）"
-version: 2.0.0
+version: 2.6.0
 author: "USER"
 agent_created: true
 allowed-tools: Read,Write,Edit,Bash,PowerShell,Glob,Grep,WebFetch,Skill,AskUserQuestion,DeferExecuteTool,ToolSearch
@@ -47,11 +47,17 @@ visibility: "private"
    - 注：Markdown 无原生底色，故用【存疑】…【/存疑】文字包裹标记。
 
 ## 环境准备（首次使用）
-本 skill 的 3 个脚本需要 Python 3 与下列依赖。建议新建一个独立虚拟环境（位置任意）：
+本 skill 的脚本需要 Python 3 与下列依赖。虚拟环境应建在**技能目录之外**——技能目录要能被复制/分发/提交，venv（数十 MB、与本机解释器路径绑定）属于本地运行环境，不是技能资产：
 
 1. 创建虚拟环境：`python3 -m venv <venv>`
-2. 安装依赖：`pip install beautifulsoup4 lxml cos-python-sdk-v5`（若用 uv：`uv pip install --python <venv> beautifulsoup4 lxml cos-python-sdk-v5`）
-3. 下文中的 `<PY>` 均指该虚拟环境的 Python 解释器：Windows 为 `<venv>\Scripts\python.exe`，macOS/Linux 为 `<venv>/bin/python`。
+   （Windows 建议用 `%USERPROFILE%\.venv-<skill名>`，便于同类 skill 命名一致）
+2. 安装依赖（一律官方源，见下方硬规则）：`<PY> -m pip install -i https://pypi.org/simple beautifulsoup4 lxml cos-python-sdk-v5 pillow`
+   > 用 `<PY> -m pip` 而不是裸 `pip`：裸 `pip` 走的是 venv 里脚本的硬编码解释器路径，venv 一旦移动就会失效。
+3. `<PY>` 指该虚拟环境的 Python 解释器：Windows 为 `<venv>\Scripts\python.exe`，macOS/Linux 为 `<venv>/bin/python`。
+
+> 若本机已有可用的 `<venv>`（依赖齐全），直接复用即可，不必重建。
+
+**依赖安装源硬规则（适用于本 skill 所有环节）**：凡是安装第三方接口/插件/工具/技能的依赖（pip、npm 等任何包管理器），**默认只使用官方源**（PyPI：`-i https://pypi.org/simple`；npm：官方 registry），**禁止默认使用任何镜像源**（清华/阿里/腾讯等）。仅当官方源确实不可用（连接超时/失败）时，才**先询问用户是否允许改用镜像源**，经用户明确同意后再切换，并向用户说明实际使用了哪个源。
 
 ## 完整流程
 
@@ -61,25 +67,76 @@ visibility: "private"
 - 可选 `folder_id`：若用户明确要存进某库内的某个**已存在**文件夹，先用 `get_knowledge_list`（knowledge_base_id + FOLDER 过滤）在该库内查到对应 `folder_id`；ima 连接器不支持新建文件夹，**不要臆造 folder_id**，没有就存库根目录。
 
 ### Step 1 抓取正文
-对每篇 URL 用 `WebFetch` 提取：标题、作者/来源、发布时间、全部正文。**保留原文层级结构、章节小标题、要点列表、提示词/操作步骤、案例/代码**（准则 1、3）。WebFetch 若对图片给出了位置/说明（如"[图：xxx]"或 alt 文本），一并记下，供 Step 2 放图用（按文档顺序与 Step 1b 下载的图片一一对应）。知乎/公众号若反爬失败，再用浏览器技能兜底。
+对每篇 URL 用 `WebFetch` 提取：标题、作者/来源、发布时间、全部正文。**保留原文层级结构、章节小标题、要点列表、提示词/操作步骤、案例/代码**（准则 1、3）。WebFetch 若对图片给出了位置/说明（如"[图：xxx]"或 alt 文本），一并记下，供 Step 2 放图用（按文档顺序与 Step 1b 下载的图片一一对应）。若反爬失败，再用浏览器技能兜底。
+
+> **URL 不限于公众号**：`scripts/extract_article.py` 已内置正文容器识别，按优先级匹配 `#js_content`（公众号）、`.RichText`/`#js_article`（知乎）、`.markdown-body`、`.post-content`、`.article-content`、`article`、`main` 等，并带"文本量最大的紧凑容器"启发式兜底；元信息也做了通用化（`og:title` / `<meta name=author>` / `article:published_time` / `<time>`），公众号的 `var msg_title` 等 JS 变量优先。
+>
+> **推荐直接用本 skill 的 `scripts/extract_article.py`**，它一次产出「正文块 + 图片占位」有序中间稿，避免 WebFetch 丢图片位置、丢代码块换行：
+> ```bash
+> <PY> url-to-ima/scripts/extract_article.py <文章URL> <临时目录>/article_raw.txt
+> ```
+> 中间稿标记：`[CODE:lang]…[/CODE]`（代码/提示词，逐字含换行，`lang` 由 `class="language-xxx"` 等探测，探测不到则为空）、`[TABLE]…[/TABLE]`、`[[IMG:src]]`（图片占位，按原文顺序）、`## 标题`。首次抓取会把原始 HTML 落盘为 `raw_<URL哈希>.html` 供复用（短时间重复抓取会被微信限流、返回无正文页）。
 
 ### Step 1b 图片下载（准则 2 落地，必做）
-直接用本 skill 附带的 `scripts/fetch_images.py`：对原 URL 做原始抓取，解析所有 `<img>`（兼容 `data-src`/`data-original` 懒加载、相对路径补全），逐张下载到本次临时目录的 `images/` 子文件夹，按文档顺序命名为 `img_01.png`/`img_02.jpg`…，并输出 `mapping.json`（原图 src → 本地文件名；下载失败记为 `null`），同时给出 `ordered` 有序列表（src / file / alt 占位 / ok）。
+直接用本 skill 附带的 `scripts/fetch_images.py`：复用 Step 1 落盘的同一份 HTML 缓存，只在**正文容器内**按文档顺序取图，逐张下载到本次临时目录的 `images/` 子文件夹，命名为 `img_01.png`/`img_02.jpg`…，并输出 `mapping.json`（原图 src → 本地文件名；失败/装饰图记为 `null`），同时给出 `ordered` 有序列表（index / src / file / alt / ok / reason）。
 
 ```bash
 <PY> url-to-ima/scripts/fetch_images.py <文章URL> <临时目录>/images <临时目录>/mapping.json
 ```
-> 微信/知乎等站点图片可能带时效签名或防盗链，抓取失败率较高——以 `mapping.json` 的 `null`/`ok=false` 为准如实标注，不要假装成功。
+
+> **编号一致性（关键）**：`fetch_images.py` 与 `extract_article.py` 共用 `scripts/article_common.py` 的正文根定位、懒加载取值与图片序列，因此文件名 `img_0N` 的 **N 就是 `extract_article.py --drop` 要填的序号**，二者不会错位。
+> - 懒加载取值优先级统一为 `data-src` → `data-original` → `data-actualsrc` → … → `src`（`src` 垫底，避免抓到 1x1 占位图）；`srcset` 兜底；`data:image/...` 内联图原样保留、不落地。
+> - 声明宽度 ≤ 100px 的装饰图**只占编号不下载**（记为 `ok=false / reason=decorative`），以保证编号不发生位移。
+> - 微信/知乎等站点图片可能带时效签名或防盗链，抓取失败率较高——以 `ok=false` 为准如实标注，不要假装成功。
+
+#### Step 1c 广告图及配套文字过滤（必做，大模型识别）
+用户硬性要求：**广告图片及其配套的推广文字不得进入最终文件；是否广告必须由大模型（agent）亲自看图、读文字来判断，禁止脚本按关键词自动删**。流程如下：
+
+1. **装饰图自动丢弃**（`extract_article.py` 已内置）：宽度 ≤ 100px 的占位图/统计像素，无内容价值，直接排除并在 `META.images_auto_dropped` 记录。
+2. **候选上报仅是线索，不是结论**。`extract_article.py` 会把首图、末图、紧邻短促引导句的图上报到 `META.ad_candidates`——这只是缩小范围的提示。**关键词命中的不一定是广告，未命中的也可能是广告**（实测中有无任何引导句的纯广告横幅），所以候选清单不能代替看图。
+3. **大模型目视识别（判定核心）**：agent 必须用 Read 逐张查看图片本体，并结合图片前后的正文文字综合判断：
+   - 广告横幅、二维码、引流图、课程/产品/社群推广图、引导关注图 → 判为广告；
+   - 正文截图、数据图表、示意图、操作演示 → 保留。
+   **教程类正文常含「点击+号」「点击开通并授权」等字样，纯关键词法会把这类正文截图误判为广告（已实测踩坑），所以判定只能看图，不能看词。**
+   效率技巧：图多时可用 Pillow 把多张图按序号拼成一张大图，一次 Read 完成目视浏览；但结论必须逐图给出（第几张、是什么、删/留）。
+
+   看图：候选图在 Step 1b 已下载到 `<临时目录>/images/img_0N.<ext>`（**N 即候选的 `index`**），直接用 Read 打开对应文件逐张查看即可，无需另行下载。若某候选在 `mapping.json` 里是 `ok=false`（图体抓取失败），说明拿不到图片本体，**按准则 4 记为存疑**，不得凭文字猜测判定。
+4. **配套文字一并过滤**：删广告图的同时，由大模型通读其紧邻文字，把纯推广性质的文字一并从最终 md 剔除——如文首推广链接行、文末悬空引导语（"点个在看""扫码进群"之类）、与广告图绑定的 call-to-action 段落。**正文本体一个字不动**（红线仍是准则 1：只删营销噪音，不删内容）。
+5. 判为广告的图片，按**你刚才看过的那张图的编号**（= 文件名 `img_0N` 里的 `N` = `META.ad_candidates` 的 `index`）记入 `extract_article.py --drop "序号"` 重跑排除；配套推广文字在 Step 2 整理时直接不写入。
+   > 流程上先抓全量、再由图判定、最后 `--drop` 重跑排除，是有意设计（判定必须发生在看到图之后），不要试图在抓取阶段就靠规则过滤。
+6. 处理结果（删了哪几张图、各是什么广告、连带删了哪些文字、保留判定）必须在最终答复中告知用户，便于人工复核。
+
+#### Step 1d 保留图片规格统一（必做，广告过滤定稿后执行）
+用户硬性要求：**进入最终文件的图片必须先统一规格——全部转 WebP（quality=98、支持透明背景），最长边超过 1600px 的等比缩小**。在广告过滤定稿（该删的图已通过 `--drop` 重跑排除）之后、Base64 内嵌之前，用本 skill 的 `scripts/normalize_images.py` 处理：
+
+```bash
+<PY> url-to-ima/scripts/normalize_images.py <临时目录>/images <临时目录>/body.md
+```
+
+规则（脚本已内置）：
+- 全部统一转为 **WebP**（quality=98，**支持透明通道**，不合成白底）；**动图（GIF/APNG/动态 WebP）保留动画**，转为动态 WebP（逐帧转模式/缩放，帧时长与循环次数沿用源图，逐帧透明也保留）；
+- 高或宽任一超过 **1600px** 时，按最长边 1600 **等比缩小**（LANCZOS），不超过则保持原尺寸；
+- 统一命名为 `<原名去后缀>.webp`，旧文件删除；md 里的 `images/xxx.<旧后缀>` 引用由脚本同步改为 `.webp`。
+
+执行位置：**必须在 `embed_base64.py` 之前**（内嵌后再改图片文件与引用就晚了）。脚本按图片**内容**（PIL 嗅探）而非文件名工作，产出 `.webp` 的同时会把 md 引用同步改掉，因此源站图片 URL 无后缀（如微信 `/640?wx_fmt=jpeg`）导致的扩展名失真会被一并纠正，**无需任何额外的后缀校正步骤**。脚本逐张输出转换/缩放明细，需在最终答复中告知用户。
 
 ### Step 2 整理为 Markdown（结构化文章）
 写一个干净的 `.md`（UTF-8），结构如下：
-1. **标题**（一级 `#`）。
+
+> **机械部分用脚本**：`scripts/build_md.py` 把中间稿转成正文（`[CODE:lang]`→带语言标记的围栏代码块、`[TABLE]`→自动补分隔行的 Markdown 表格、`[[IMG]]`→本地图片引用、`data:` 内联图原样直出），只输出 `# 标题` + 正文：
+> ```bash
+> <PY> url-to-ima/scripts/build_md.py <临时目录>/article_raw.txt <临时目录>/mapping.json <临时目录>/body.md
+> ```
+> 随后跑 `scripts/normalize_images.py`（Step 1d）统一为 WebP、限制最长边 1600px 并同步引用后缀，最后跑 `embed_base64.py` 内嵌。
+> **文首「来源信息行 + 内容概要」与文末「来源块」属判断性内容，需自行补写**：来源信息可取 `META.author` / `META.publish_bj` / `META.source_url`（非公众号页面的时间来自 `article:published_time` 或 `<time>`，确实抓不到就写「未标注」，不要编造）。
+
+1. **标题**（一级 `#`）。若正文首个 `<h1>` 与标题重复，`extract_article.py` 已自动跳过，不会出现两个同名一级标题。
 2. **来源信息行**：作者/公众号、发布时间、原始链接。
 3. **内容概要**（准则 1）：2–5 句话概括全文主旨与要点，不得引入原文没有的结论。
 4. **正文**：按原文逻辑分节（`##`/`###` + 段落/列表）。要求：
    - 数据、表格用 Markdown 表格原样保留；
    - 图片先按文档顺序写成本地相对引用 `![<说明>](images/img_0N.<ext>)`（N 与 Step 1b 下载顺序对应；无法对应的图直接写 `【存疑】[图：<说明> 未获取到]【/存疑】`）；
-   - 代码、提示词、实例、案例用 ``` 围栏代码块**逐字**保留（准则 3）；
+   - 代码、提示词、实例、案例用 ``` 围栏代码块**逐字**保留（准则 3）。注意：脚本只逐字保留 `<pre>` 内的代码；若某站点的代码不在 `<pre>` 内，缩进会在解析阶段就丢失，`extract_article.py` 会把这类容器列进 `META.code_without_pre` 并在终端告警——遇到时必须对照原页面核对，必要时用 **【存疑】…【/存疑】** 说明"缩进可能失真"，**不得把可能失真的代码当逐字原文交付**。
    - 存疑内容用 **【存疑】…【/存疑】** 包裹（准则 4）。
 5. **来源块**（文末）：原始链接、说明"本文为对原网页的忠实深度整理，已去除营销/视频占位噪音，图片已 Base64 内嵌"。
 
@@ -120,7 +177,7 @@ Markdown 是纯文本，无需格式转换。Step 2c 完成后即可直接入库
 <PY> url-to-ima/scripts/upload_cos.py <cred.json 路径> <本地 md 路径>
 ```
 脚本内部用 `cos-python-sdk-v5` 的 `CosConfig(...)` + `CosS3Client.put_object(...)` 上传。**不要**手写 COS 签名——手写签名会稳定得到 403。
-> 若虚拟环境里缺少依赖，按"环境准备"一节安装（`beautifulsoup4 lxml cos-python-sdk-v5`）。
+> 若虚拟环境里缺少依赖，按"环境准备"一节安装（`beautifulsoup4 lxml cos-python-sdk-v5 pillow`）。
 > STS 凭证是短时效，但**务必在拿到凭证后立刻上传**，不要在中间做耗时操作，否则易遇 `InvalidAccessKeyId`。
 
 **4c. add_knowledge（入库，必调！）**
@@ -145,8 +202,25 @@ Markdown 是纯文本，无需格式转换。Step 2c 完成后即可直接入库
 | 文件上传了却不在 ima 里 | **漏调 `add_knowledge`** | 三步缺一不可，最后必须调入库接口 |
 | md 里图片显示成破图/外链 | 没跑 `embed_base64.py`，仍是用本地 `images/` 相对路径 | Step 2c 必须执行，把图片 Base64 内嵌进 md |
 | 图片下载失败被忽略 | fetch_images 报 null 但整理时没标存疑 | 下载失败处写 `【存疑】[图：... 未获取到]【/存疑】` |
+| `pip install` 报 `No matching distribution found` / 连接超时 | 默认源或镜像不可达 | **一律先试官方源**：`<PY> -m pip install -i https://pypi.org/simple <包名>`（安装耗时可达数分钟，用后台任务跑）；官方源确实不可用时，先问用户是否允许换镜像源，同意后再切 |
+| 内嵌后的图片打不开 / 格式不符 | 源站图片 URL 常无后缀（如微信 `/640?wx_fmt=jpeg`），按 URL 推断扩展名会失真 | `normalize_images.py` 按图片**内容**转出 `.webp` 并同步 md 引用，自动纠正，无需额外处理 |
+| 正文有内容缺失、图片位置对不上 | 只用 WebFetch 取正文，模型会丢图片位置 | 用 bs4 按正文容器递归输出「正文块 + 图片占位」有序中间稿，再据此落图（容器由 `article_common.py` 自动识别） |
+| 刚 add_knowledge 后 `get_knowledge_list` 查不到、total_size 不变 | 列表接口有缓存/排序延迟，并非入库失败 | 用 `search_knowledge`(knowledge_base_id + 标题关键词) 核验，能查到且 `media_state=2` 即成功；不要据此重传 |
+| 提示词/SOP 代码块被拼成一行，换行全丢 | 微信代码块把每行包在独立 `<span>` 里、行间用 `<br>`；`get_text()` 不包含 `<br>` | 用递归函数把 `br` 转 `\n` 后再取文本（在 `pre` 分支**不要**调用带 `code` 快捷分支的 inline 函数，否则会走 `get_text()` 并套上反引号） |
+| 二次抓取同一 URL 时正文为空、解析报错 | 短时间重复请求被微信限流 | 首次抓取就把原始 HTML 落盘为 `raw_<URL哈希>.html`，两个脚本共用同一缓存；缓存缺失才走网络 |
+| 未识别的站点：正文抓到导航/评论区，或图片编号与 `--drop` 对不上 | 正文容器候选未命中该站点结构；或两个脚本各用一套编号（旧版本问题） | 正文容器由 `article_common.py` 统一识别（`#js_content`→知乎→`.markdown-body`→…→`article`/`main`→启发式兜底），两个脚本共用同一序列，编号天然一致；若仍不合，检查终端输出的 `content root:` 是否为预期容器 |
+| 代码块缩进丢失（代码被压平/变形） | 该站点的代码**不在 `<pre>` 内**（如直接放在 `div.code` 里）；bs4 只对 `pre/textarea` 保留空白，非 pre 容器的行首缩进在解析阶段就没了 | `extract_article.py` 会把这类容器列进 `META.code_without_pre` 并告警；此时必须对照原页面核对，核对不了就标【存疑】，**不要冒充逐字原文** |
+| 正文教程截图被当广告误删 | 文章正文本就含「点击+号」等引导字样，纯关键词匹配不可靠 | 候选只上报不自动删；必须用 Read 看图确认后再 `--drop`（见 Step 1c） |
+| 文末/文首广告图或推广文字混入成品 | 广告常出现在正文首尾边界，且未必有引导句；配套推广文字易被当成正文照抄 | Step 1c：占位图自动丢弃 + 大模型逐图目视判定；删广告图时同步由大模型通读紧邻文字，剔掉推广链接行/悬空引导语等配套文字 |
+| 图片全部标「存疑」、0 张内嵌 | `embed_base64.py` 按 md 里的 `images/xxx` 相对路径找文件，图片没放在 md 同级的 `images/` 目录 | 保证目录结构 `<工作目录>/images/`，且 md 与 `images/` 同级；否则先改名再跑内嵌 |
+| md 引用与实际文件后缀不一致、内嵌后 MIME 错误 | normalize 之后引用应全为 `.webp`；若仍出现旧后缀 | 确认 `normalize_images.py` 在 `embed_base64.py` 之前运行且传入了 body.md 路径（它会同步引用为 `.webp`）；未同步的引用可手动改为 `.webp` 后重跑 embed |
+| 需要覆盖知识库里的同名旧文档 | 重灌/去广告后重传，默认 `SAVE` 会生成重复条目 | `add_knowledge` 用 `DUPLICATE_NAME_STRATEGY_REPLACE`，file_name 与旧条目完全一致；核验方式：对比 KB `size` 前后差值 = (旧字节数−新字节数) 之和，且 `total_size` 不变即确认替换成功 |
 
 ## 附：本 skill 提供的文件
-- `scripts/fetch_images.py`：对文章 URL 原始抓取，下载全部图片到 `images/`，输出 `mapping.json`（原图 src → 本地文件名 / 失败为 null，含 ordered 有序列表）（Step 1b 用）。
+- `scripts/article_common.py`：**共用工具层**——HTML 抓取与 `raw_<URL哈希>.html` 缓存、正文容器识别（公众号/知乎/常见文章页/启发式兜底）、懒加载 src 取值优先级、统一图片序列。其余脚本引用它，保证「同一篇文章、同一套编号」。
+- `scripts/extract_article.py`：解析正文，输出「正文块 + 图片占位」有序中间稿（`[CODE:lang]`/`[TABLE]`/`[[IMG]]`），代码块逐字保留换行；上报装饰图与广告候选（供 agent 看图后 `--drop`）（Step 1 用）。
+- `scripts/fetch_images.py`：复用同一 HTML 缓存，在正文容器内按统一序列下载图片到 `images/`，输出 `mapping.json`（src → 文件名 / 失败或装饰图为 null，含 `ordered` 有序列表）（Step 1b 用）。
+- `scripts/build_md.py`：把中间稿 + `mapping.json` 组装成正文 md（正文部分，不含概要/来源块）；支持代码语言标记、反引号转义、`data:` 内联图直出（Step 2 用）。
+- `scripts/normalize_images.py`：把 `images/` 内全部图片统一转 WebP（quality=98、支持透明通道；动图保留动画转动态 WebP），最长边超 1600px 等比缩小，删除旧文件，并同步 md 里的图片引用为 `.webp`（Step 1d 用，必须在 embed 前执行）。
 - `scripts/embed_base64.py`：把 md 里的本地图片引用 `![alt](images/xxx)` 替换为 Base64 `data:` URI；找不到的文件（下载失败）替换为 `【存疑】[图：alt 未获取到]【/存疑】`（Step 2c 用）。
 - `scripts/upload_cos.py`：读取 `cos_credential` JSON + 本地文件，用官方 SDK 上传到 COS（Step 4b 用）。
