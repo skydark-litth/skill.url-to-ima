@@ -157,7 +157,16 @@ def code_text(node):
         if isinstance(ch, NavigableString):
             parts.append(str(ch))
         elif isinstance(ch, Tag):
-            parts.append('\n' if ch.name == 'br' else code_text(ch))
+            if ch.name == 'br':
+                parts.append('\n')
+            elif ch.name == 'code':
+                # 微信 code-snippet__js 结构：pre 内每个 <code> 元素是一行，
+                # 行间无 <br>/换行符，直接递归会把所有行粘连成一行——补 \n 分行。
+                # 常规站点（GitHub/Prism 等）pre>code 只有一个包裹元素，
+                # 多出的尾部 \n 会被下方空行清理逻辑去掉，无副作用。
+                parts.append(code_text(ch) + '\n')
+            else:
+                parts.append(code_text(ch))
     return ''.join(parts)
 
 def code_lang(node):

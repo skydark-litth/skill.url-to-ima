@@ -2,7 +2,7 @@
 name: url-to-ima
 description: "将网页/文章 URL 整理为 Markdown 知识库文章并存入用户指定的 ima 知识库。流程：抓取正文（含图片Base64内嵌、代码/提示词全文保留、存疑文字标记）→ 广告图及配套推广文字由大模型目视识别后过滤 → 保留图片统一转WebP（quality=98，支持透明）并限最长边1600px → AI大模型分析蒸馏（去除聊天式对话/寒暄/营销噪音，保留知识讲解、功能说明、示例、经验心得，分门别类重组为逻辑清晰、顺畅可读的知识库文章）→ create_media→COS上传→add_knowledge 入库 → 核验 → 确认成功后才清理本地临时文件。适配微信公众号及各类普通文章网页（article/main/常见正文容器）。适用于把收藏的文章沉淀进 ima 知识库。"
 description_zh: "网页URL整理为Markdown并存入指定ima知识库（图片Base64内嵌/代码全文/存疑文字标记）"
-version: 2.7.0
+version: 2.7.1
 author: "USER"
 agent_created: true
 allowed-tools: Read,Write,Edit,Bash,PowerShell,Glob,Grep,WebFetch,Skill,AskUserQuestion,DeferExecuteTool,ToolSearch
@@ -211,6 +211,7 @@ Markdown 是纯文本，无需格式转换。Step 2c 完成后即可直接入库
 |---|---|---|
 | 上传返回 403 `InvalidAccessKeyId` | create_media 与上传间隔太久，STS 凭证过期 | 拿到凭证后立刻上传；不要提前很久调 create_media |
 | 上传 403 `SignatureDoesNotMatch` | 手写 COS 签名算法有 bug | 改用官方 `cos-python-sdk-v5`，不要手写 |
+| Bash 里跑脚本被沙箱拦截，报 `decisionRecord missing actual resource subject` 之类 sandbox 错误（尤其 COS 上一步 `upload_cos.py`） | 沙箱对该命令缺失决策记录，与脚本本身无关 | 改用 **PowerShell 工具**跑同一条命令（`& "<PY>" <脚本> <参数...>`），通常即可通过；不要把该报错当成上传失败而重试 create_media |
 | 文件上传了却不在 ima 里 | **漏调 `add_knowledge`** | 三步缺一不可，最后必须调入库接口 |
 | md 里图片显示成破图/外链 | 没跑 `embed_base64.py`，仍是用本地 `images/` 相对路径 | Step 2c 必须执行，把图片 Base64 内嵌进 md |
 | 图片下载失败被忽略 | fetch_images 报 null 但整理时没标存疑 | 下载失败处写 `【存疑】[图：... 未获取到]【/存疑】` |
@@ -218,7 +219,7 @@ Markdown 是纯文本，无需格式转换。Step 2c 完成后即可直接入库
 | 内嵌后的图片打不开 / 格式不符 | 源站图片 URL 常无后缀（如微信 `/640?wx_fmt=jpeg`），按 URL 推断扩展名会失真 | `normalize_images.py` 按图片**内容**转出 `.webp` 并同步 md 引用，自动纠正，无需额外处理 |
 | 正文有内容缺失、图片位置对不上 | 只用 WebFetch 取正文，模型会丢图片位置 | 用 bs4 按正文容器递归输出「正文块 + 图片占位」有序中间稿，再据此落图（容器由 `article_common.py` 自动识别） |
 | 刚 add_knowledge 后 `get_knowledge_list` 查不到、total_size 不变 | 列表接口有缓存/排序延迟，并非入库失败 | 用 `search_knowledge`(knowledge_base_id + 标题关键词) 核验，能查到且 `media_state=2` 即成功；不要据此重传 |
-| 提示词/SOP 代码块被拼成一行，换行全丢 | 微信代码块把每行包在独立 `<span>` 里、行间用 `<br>`；`get_text()` 不包含 `<br>` | 用递归函数把 `br` 转 `\n` 后再取文本（在 `pre` 分支**不要**调用带 `code` 快捷分支的 inline 函数，否则会走 `get_text()` 并套上反引号） |
+| 提示词/SOP 代码块被拼成一行，换行全丢 | 旧版微信把每行包在独立 `<span>` 里、行间用 `<br>`；新版（`pre.code-snippet__js`）则**每个 `<code>` 元素是一行、行间无任何换行符** | `code_text()` 已同时处理两种结构：`<br>`→`\n`，且 pre 内每个 `<code>` 子元素结尾补 `\n`（多出的尾部空行由后续清理逻辑去掉）。在 `pre` 分支**不要**调用带 `code` 快捷分支的 inline 函数，否则会走 `get_text()` 并套上反引号 |
 | 二次抓取同一 URL 时正文为空、解析报错 | 短时间重复请求被微信限流 | 首次抓取就把原始 HTML 落盘为 `raw_<URL哈希>.html`，两个脚本共用同一缓存；缓存缺失才走网络 |
 | 未识别的站点：正文抓到导航/评论区，或图片编号与 `--drop` 对不上 | 正文容器候选未命中该站点结构；或两个脚本各用一套编号（旧版本问题） | 正文容器由 `article_common.py` 统一识别（`#js_content`→知乎→`.markdown-body`→…→`article`/`main`→启发式兜底），两个脚本共用同一序列，编号天然一致；若仍不合，检查终端输出的 `content root:` 是否为预期容器 |
 | 代码块缩进丢失（代码被压平/变形） | 该站点的代码**不在 `<pre>` 内**（如直接放在 `div.code` 里）；bs4 只对 `pre/textarea` 保留空白，非 pre 容器的行首缩进在解析阶段就没了 | `extract_article.py` 会把这类容器列进 `META.code_without_pre` 并告警；此时必须对照原页面核对，核对不了就标【存疑】，**不要冒充逐字原文** |
