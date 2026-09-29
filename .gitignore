@@ -4,3 +4,7 @@ __pycache__/
 *.pyc
 raw_*.html
 url-to-ima-tmp/
+
+# 运行时凭据（create_media 返回的 cos_credential，含 STS 临时密钥）：绝不入库
+cred*.json
+*credential*.json
