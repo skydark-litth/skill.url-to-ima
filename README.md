@@ -50,6 +50,7 @@
 | 入库三连 | Step 4 | `create_media` → `scripts/upload_cos.py` → `add_knowledge` |
 | 核验 | Step 5 | `get_knowledge_list` 确认 `media_state=2` |
 | 清理 | Step 6 | 仅成功时删除临时目录 |
+| 排错 | 按需 | 出现异常时读 `references/faq.md` |
 
 > 完整细节（含参数、异常处理、FAQ 排错表）见仓库内 [`SKILL.md`](./SKILL.md)。
 
@@ -64,6 +65,7 @@
 | `scripts/normalize_images.py` | 图片统一转 WebP、限 1600px，并同步 md 引用 |
 | `scripts/embed_base64.py` | 本地图片引用替换为 Base64 `data:` URI |
 | `scripts/upload_cos.py` | 读取 `cos_credential` JSON + 文件，用官方 SDK 上传 COS |
+| `references/faq.md` | 排错手册（六类异常的现象/原因/处置），按需加载 |
 
 ## 环境准备
 
@@ -87,7 +89,3 @@ python3 -m venv <venv>
 - 入库动作通过你自己的 ima 账号完成，文件落在你指定的知识库；**不会**上传到任何第三方平台。
 - 私钥、token 等凭据不参与任何仓库同步。
 - 广告判定由本地大模型执行，图片不离开本机即被用于判定。
-
-## 版本
-
-- 当前版本：**v2.7.1**（详见 [`SKILL.md`](./SKILL.md) 顶部 `version` 字段）。

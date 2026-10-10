@@ -92,6 +92,17 @@ def main() -> None:
     for p in sorted(img_dir.iterdir()):
         if not p.is_file():
             continue
+        if p.suffix.lower() == ".webp":
+            # 已是目标格式（如 --drop 后重跑）：跳过，避免二次有损重编码。
+            # 尺寸若超 1600px 仍按下方流程处理（首次转换时已缩过，正常不会命中）。
+            try:
+                im = Image.open(p)
+                im.load()
+                if max(im.size) <= MAX_SIDE:
+                    print(f"[skip] {p.name}: 已是 WebP 且未超 {MAX_SIDE}px，跳过")
+                    continue
+            except Exception:
+                pass
         try:
             im = Image.open(p)
             im.load()

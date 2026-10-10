@@ -55,12 +55,21 @@ body = re.sub(r'\[CODE(?::([^\]]*))?\](.*?)\[/CODE\]', code_repl, body, flags=re
 body = re.sub(r'\[TABLE\](.*?)\[/TABLE\]',
               lambda m: fix_table(m.group(1).strip()), body, flags=re.S)
 
-idx = {src: i + 1 for i, src in enumerate(img_order)}
-file2n = {src2file[s]: n for s, n in idx.items()}
+def _n_from_filename(fname: str) -> int:
+    """从文件名 img_0N.<ext> 提取 N，作为「原文配图 NN」的编号。
+
+    编号必须与 Step 1b 的 img_0N / extract_article.py --drop N 严格一致，
+    因此**不能**按图片在 md 中出现顺序自行计数：一旦蒸馏时调整了图片位置，
+    或正文靠前的图下载失败（不进 img_order，导致后续编号整体前移），
+    自行计数就会与 --drop N 错位，使人工复核误判。
+    """
+    m = re.match(r'img_(\d+)\.', fname or '')
+    return int(m.group(1)) if m else 0
+
 
 def local_repl(m):
     v = m.group(1)
-    n = file2n.get(v, 0)
+    n = _n_from_filename(v)
     if v.startswith('data:'):
         return f'![原文配图 {n:02d}]({v})'          # 内联图片：直接原样输出 data URI
     return f'![原文配图 {n:02d}](images/{v})'

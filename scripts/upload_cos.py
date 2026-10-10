@@ -29,6 +29,17 @@ def main():
     creds_path, local_path = sys.argv[1], sys.argv[2]
     creds = json.load(open(creds_path, encoding="utf-8"))
 
+    # 显式校验凭证结构：最常见的错误是 cred.json 多包了一层 {"cos_credential": {...}} 外壳。
+    if "cos_credential" in creds and "region" not in creds:
+        print("ERROR: cred.json 多包了一层 cos_credential 外壳。"
+              "请直接写入该对象内部的字段（region/secret_id/secret_key/token/bucket_name/cos_key）。")
+        sys.exit(2)
+    missing = [k for k in ("region", "secret_id", "secret_key", "token",
+                           "bucket_name", "cos_key") if not creds.get(k)]
+    if missing:
+        print("ERROR: cred.json 缺少必需字段: %s" % ", ".join(missing))
+        sys.exit(2)
+
     config = CosConfig(
         Region=creds["region"],
         SecretId=creds["secret_id"],

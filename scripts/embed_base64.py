@@ -28,7 +28,9 @@ MIME = {
     "svg": "image/svg+xml",
 }
 
-IMG_RE = re.compile(r"!\[([^\]]*)\]\(([^)]+)\)")
+# 图片引用正则：alt 不允许含 ]；路径用非贪婪匹配到「最后一个 )」，以兼容
+# 路径里带括号的文件名（如 images/img_(1).png）——旧的 [^)]+ 会在第一个 ) 处截断。
+IMG_RE = re.compile(r"!\[([^\]]*)\]\((.*)\)")
 
 
 def _embed_match(m, base_dir):
@@ -36,6 +38,9 @@ def _embed_match(m, base_dir):
     if path.startswith(("http://", "https://", "data:")):
         return m.group(0)  # 远程/已内嵌，保留
     local = path
+    # 容错：以 / 开头的伪绝对路径（如 /images/img_01.png）归一化为相对 base_dir
+    if local.startswith("/"):
+        local = local.lstrip("/")
     if not os.path.isabs(local):
         local = os.path.join(base_dir, local)
     if os.path.exists(local):
